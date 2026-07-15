@@ -1,18 +1,18 @@
 {
 	"$schema": "../node_modules/@companion-module/base/assets/manifest.schema.json",
 	"type": "connection",
-	"id": "your-module-name",
-	"name": "your-module-name",
-	"shortname": "module-shortname",
-	"description": "A short one line description of your module",
+	"id": "streamlabs-desktop",
+	"name": "streamlabs-desktop",
+	"shortname": "slobs",
+	"description": "Control Streamlabs Desktop (scenes, streaming, recording, audio) through its local remote control API",
 	"version": "0.0.0",
 	"license": "MIT",
-	"repository": "git+https://github.com/bitfocus/companion-module-your-module-name.git",
-	"bugs": "https://github.com/bitfocus/companion-module-your-module-name/issues",
+	"repository": "git+https://github.com/bitfocus/companion-module-streamlabs-desktop.git",
+	"bugs": "https://github.com/bitfocus/companion-module-streamlabs-desktop/issues",
 	"maintainers": [
 		{
-			"name": "Your name",
-			"email": "Your email"
+			"name": "Ben Gosciniak",
+			"email": "ben@picture-element.fr"
 		}
 	],
 	"runtime": {
@@ -21,8 +21,8 @@
 		"apiVersion": "0.0.0",
 		"entrypoint": "../dist/main.js"
 	},
-	"legacyIds": [],
-	"manufacturer": "Your company",
-	"products": ["Your product"],
-	"keywords": []
+	"legacyIds": ["streamlabs-obs"],
+	"manufacturer": "Streamlabs",
+	"products": ["Streamlabs Desktop"],
+	"keywords": ["streamlabs", "slobs", "obs", "streaming", "recording", "scenes"]
 }

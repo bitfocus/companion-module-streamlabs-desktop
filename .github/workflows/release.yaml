@@ -1,0 +1,58 @@
+name: Release
+
+# Packages the module and publishes a GitHub Release whenever a version tag is pushed.
+# Tag the release commit with e.g. `v1.0.0` (see CONTRIBUTING / README) to trigger it.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Package and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.x
+
+      - name: Prepare environment
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install
+        env:
+          CI: true
+
+      - name: Build, lint and test
+        run: |
+          yarn build
+          yarn lint
+          yarn test
+        env:
+          CI: true
+
+      - name: Package module
+        run: yarn package
+        env:
+          CI: true
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The packaged module is written to <id>-<version>.tgz at the repo root
+          asset=$(ls -1 *.tgz | head -n1)
+          echo "Publishing release ${{ github.ref_name }} with asset ${asset}"
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            "${asset}"

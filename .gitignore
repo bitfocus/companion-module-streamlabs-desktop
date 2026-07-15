@@ -6,3 +6,7 @@ package-lock.json
 DEBUG-*
 /.yarn
 /.vscode
+.DS_Store
+
+# Internal working docs (spec, protocol notes, submission checklist) - not for the public repo
+/docs/
