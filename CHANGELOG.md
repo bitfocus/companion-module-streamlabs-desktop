@@ -3,6 +3,15 @@
 All notable changes to this module are documented in this file.
 Versions follow [semantic versioning](https://semver.org/).
 
+## v1.0.1 (2026-07-16)
+
+Maintenance release. No functional change; dependency and tooling updates only.
+
+- Update the runtime `@companion-module/base` framework to 2.1.2
+- Update dev tooling: `@types/node` to 26.x, `eslint` to 10.7, `prettier` to 3.9
+- CI: bump `actions/setup-node` to v7
+- Dependabot enabled for npm and GitHub Actions (weekly)
+
 ## v1.0.0 (2026-07-15)
 
 First public release of the native Streamlabs Desktop module for Bitfocus Companion, filling the gap left by the never-implemented `streamlabs-obs` stub (kept as a `legacyId` for store retro-compatibility).
