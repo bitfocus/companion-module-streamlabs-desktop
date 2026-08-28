@@ -26,6 +26,9 @@ export interface SlobsConnectionOptions {
 	token: string
 	/** Timeout for a single JSON-RPC request (ms), default 10000 */
 	requestTimeoutMs?: number
+	/** Timeout for the deferred result of async API methods (emitter PROMISE), which can carry
+	 * long-running work such as loading a scene collection (ms), default 60000 */
+	asyncResultTimeoutMs?: number
 	/** Automatically reconnect with exponential backoff, default true */
 	reconnect?: boolean
 	/** Transport factory, replaceable for unit tests. Defaults to sockjs-client */
@@ -94,6 +97,7 @@ export class SlobsConnection extends EventEmitter<SlobsConnectionEvents> {
 		super()
 		this.#options = {
 			requestTimeoutMs: 10000,
+			asyncResultTimeoutMs: 60000,
 			reconnect: true,
 			// The sockjs-client typings return a DOM-flavoured WebSocket; narrow to what we use
 			socketFactory: (url) => new SockJS(url) as unknown as SockJsSocket,
@@ -206,10 +210,13 @@ export class SlobsConnection extends EventEmitter<SlobsConnectionEvents> {
 				const message = error instanceof Error ? error.message : String(error)
 				if (/token/i.test(message)) {
 					this.#handleAuthFailure(message)
-				} else {
+				} else if (this.#socket) {
+					// Count the failure so the reconnect backoff grows like any other failed attempt
+					this.#failedAttempts += 1
 					this.#log('warn', `Authentication request failed: ${message}`)
 					this.#teardownSocket(`auth request failed: ${message}`)
 				}
+				// Otherwise the transport already closed and its close handler drove the teardown
 			})
 	}
 
@@ -223,7 +230,16 @@ export class SlobsConnection extends EventEmitter<SlobsConnectionEvents> {
 
 	async #resubscribeAll(): Promise<void> {
 		for (const subscription of this.#subscriptions.values()) {
-			await this.#activateSubscription(subscription)
+			try {
+				await this.#activateSubscription(subscription)
+			} catch (error) {
+				// The transport died mid-handshake: give up, the close handler drives the reconnect
+				if (!this.#socket) throw error
+				// A per-channel failure (e.g. an event this Streamlabs version does not expose) must not
+				// abort the handshake: the module keeps working without that event
+				const message = error instanceof Error ? error.message : String(error)
+				this.#log('warn', `Could not subscribe to ${subscription.resource}.${subscription.channel}: ${message}`)
+			}
 		}
 	}
 
@@ -296,9 +312,19 @@ export class SlobsConnection extends EventEmitter<SlobsConnectionEvents> {
 					return
 				}
 
-				// Async API methods answer with a PROMISE subscription that resolves through a later EVENT
+				// Async API methods answer with a PROMISE subscription that resolves through a later EVENT.
+				// Re-arm a (long) timeout: the request is only settled by that later event
 				if (isSubscriptionResult(message.result) && message.result.emitter === 'PROMISE') {
-					this.#pendingPromises.set(message.result.resourceId, pending)
+					const resourceId = message.result.resourceId
+					pending.timeout = setTimeout(() => {
+						this.#pendingPromises.delete(resourceId)
+						pending.reject(
+							new Error(
+								`${pending.description} timed out after ${this.#options.asyncResultTimeoutMs}ms waiting for its deferred result`,
+							),
+						)
+					}, this.#options.asyncResultTimeoutMs)
+					this.#pendingPromises.set(resourceId, pending)
 					return
 				}
 
@@ -315,8 +341,15 @@ export class SlobsConnection extends EventEmitter<SlobsConnectionEvents> {
 				const pending = this.#pendingPromises.get(event.resourceId)
 				if (pending) {
 					this.#pendingPromises.delete(event.resourceId)
+					clearTimeout(pending.timeout)
 					if (event.isRejected) {
-						pending.reject(new Error(`${pending.description} was rejected`))
+						const detail =
+							event.data === undefined || event.data === null
+								? ''
+								: typeof event.data === 'string'
+									? event.data
+									: JSON.stringify(event.data)
+						pending.reject(new Error(`${pending.description} was rejected${detail ? `: ${detail}` : ''}`))
 					} else {
 						pending.resolve(event.data)
 					}

@@ -15,13 +15,6 @@ export type ModuleSecrets = {
 export const DEFAULT_HOST = '127.0.0.1'
 export const DEFAULT_PORT = 59650
 
-/** Defaults applied when a field is missing (config created by an older version) */
-export const CONFIG_DEFAULTS: Omit<ModuleConfig, 'host' | 'port'> = {
-	audioScope: 'all',
-	lockStreaming: false,
-	enablePerformance: true,
-}
-
 export function GetConfigFields(): SomeCompanionConfigField[] {
 	return [
 		{

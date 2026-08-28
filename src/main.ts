@@ -1,5 +1,5 @@
 import { InstanceBase, InstanceStatus, type SomeCompanionConfigField } from '@companion-module/base'
-import { CONFIG_DEFAULTS, GetConfigFields, type ModuleConfig, type ModuleSecrets } from './config.js'
+import { GetConfigFields, type ModuleConfig, type ModuleSecrets } from './config.js'
 import { UpdateVariableDefinitions, type VariablesSchema } from './variables.js'
 import { UpgradeScripts } from './upgrades.js'
 import { UpdateActions, type ActionsSchema } from './actions.js'
@@ -35,8 +35,24 @@ const CONNECTION_FAILURE_THRESHOLD = 3
 /** Debounce window for full re-syncs triggered by bursts of events (e.g. scene collection switch) */
 const RESYNC_DEBOUNCE_MS = 250
 
+/** Delay before retrying the initial state sync when it fails on a live connection */
+const SYNC_RETRY_MS = 5000
+
 /** Base tick for duration timers; performance is polled every other tick */
 const TICK_INTERVAL_MS = 1000
+
+/** Every feedback id, for full re-checks after syncs, disconnections and teardowns */
+const ALL_FEEDBACKS = [
+	'scene_active',
+	'streaming_active',
+	'recording_active',
+	'audio_muted',
+	'item_visible',
+	'collection_active',
+	'replay_buffer_active',
+	'studio_mode_active',
+	'dropped_frames_above',
+] as const
 
 /** Statuses documented by the API; anything else is accepted but logged once for support */
 const KNOWN_STATUSES: Record<string, string[]> = {
@@ -55,8 +71,11 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	#sceneResyncTimer: NodeJS.Timeout | null = null
 	#audioResyncTimer: NodeJS.Timeout | null = null
 	#collectionResyncTimer: NodeJS.Timeout | null = null
+	#syncRetryTimer: NodeJS.Timeout | null = null
 	#tickTimer: NodeJS.Timeout | null = null
 	#tickCount = 0
+	/** True while the last connection attempt was rejected because of the token */
+	#authRejected = false
 	readonly #warnedStatuses = new Set<string>()
 
 	constructor(internal: unknown) {
@@ -64,21 +83,23 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	}
 
 	async init(config: ModuleConfig, _isFirstInit: boolean, secrets: ModuleSecrets | undefined): Promise<void> {
-		this.config = { ...CONFIG_DEFAULTS, ...config }
+		this.config = config
 		this.secrets = { token: '', ...secrets }
 
 		this.refreshDefinitions()
+		// Publish default values so no variable shows $NA before the first connection
+		this.refreshAllVariables()
 		this.#initConnection()
 	}
 
 	// When module gets deleted
 	async destroy(): Promise<void> {
 		this.log('debug', 'destroy')
-		this.#teardownConnection()
+		this.#teardownConnection(false)
 	}
 
 	async configUpdated(config: ModuleConfig, secrets: ModuleSecrets | undefined): Promise<void> {
-		this.config = { ...CONFIG_DEFAULTS, ...config }
+		this.config = config
 		this.secrets = { token: '', ...secrets }
 
 		this.#teardownConnection()
@@ -91,6 +112,8 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	}
 
 	#initConnection(): void {
+		this.#authRejected = false
+
 		if (!this.config.host || !this.config.port) {
 			this.updateStatus(InstanceStatus.BadConfig, 'Host and port are required')
 			return
@@ -115,15 +138,23 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		connection.on('log', (level, message) => this.log(level, message))
 
 		connection.on('connecting', () => {
-			this.updateStatus(InstanceStatus.Connecting)
+			// Keep AuthenticationFailure visible across retries instead of flashing Connecting
+			if (!this.#authRejected) this.updateStatus(InstanceStatus.Connecting)
 		})
 
 		connection.on('connected', () => {
+			this.#authRejected = false
 			void this.#onConnected(connection)
 		})
 
 		connection.on('disconnected', (reason, failedAttempts) => {
 			this.#stopTick()
+			this.#clearSyncRetry()
+			this.#publishOfflineState()
+			// An auth teardown must not downgrade the AuthenticationFailure status it just caused;
+			// any other close reason means the problem is no longer the token
+			if (reason !== 'authentication failed') this.#authRejected = false
+			if (this.#authRejected) return
 			if (failedAttempts >= CONNECTION_FAILURE_THRESHOLD) {
 				this.updateStatus(InstanceStatus.ConnectionFailure, reason)
 			} else {
@@ -132,14 +163,20 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		})
 
 		connection.on('authFailed', () => {
+			this.#authRejected = true
 			this.updateStatus(InstanceStatus.AuthenticationFailure, 'Streamlabs Desktop rejected the API token')
 		})
+
+		// Register the event subscriptions once; the connection re-activates them during every auth,
+		// before 'connected' fires, so no change can be missed while the initial sync runs
+		this.#registerSubscriptions(connection)
 
 		connection.start()
 	}
 
-	#teardownConnection(): void {
+	#teardownConnection(publishClearedState = true): void {
 		this.#stopTick()
+		this.#clearSyncRetry()
 		for (const timer of [this.#sceneResyncTimer, this.#audioResyncTimer, this.#collectionResyncTimer]) {
 			if (timer) clearTimeout(timer)
 		}
@@ -153,47 +190,78 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			this.connection = null
 		}
 		this.state.clear()
+		if (publishClearedState) {
+			this.refreshAllVariables()
+			this.checkFeedbacks(...ALL_FEEDBACKS)
+		}
 	}
 
-	/** Subscriptions and initial state sync, run after every successful (re)connection */
-	async #onConnected(connection: SlobsConnection): Promise<void> {
-		try {
-			// Arm the event subscriptions first so no change is missed while syncing
-			await connection.subscribe('ScenesService', 'sceneSwitched', (data) => {
-				this.#onSceneSwitched(data as SceneModel)
-			})
-			await connection.subscribe('ScenesService', 'sceneAdded', () => this.#scheduleSceneResync())
-			await connection.subscribe('ScenesService', 'sceneRemoved', () => this.#scheduleSceneResync())
-			await connection.subscribe('ScenesService', 'itemAdded', () => this.#scheduleSceneResync())
-			await connection.subscribe('ScenesService', 'itemRemoved', () => this.#scheduleSceneResync())
-			await connection.subscribe('ScenesService', 'itemUpdated', (data) => {
-				this.#onItemUpdated(data as SceneNodeModel)
-			})
-			await connection.subscribe('StreamingService', 'streamingStatusChange', (data) => {
-				this.#onStreamingStatusChange(data)
-			})
-			await connection.subscribe('StreamingService', 'recordingStatusChange', (data) => {
-				this.#onRecordingStatusChange(data)
-			})
-			await connection.subscribe('StreamingService', 'replayBufferStatusChange', (data) => {
-				this.#onReplayBufferStatusChange(data)
-			})
-			await connection.subscribe('SourcesService', 'sourceUpdated', (data) => {
-				this.#onSourceUpdated(data as SourceModel)
-			})
-			await connection.subscribe('SceneCollectionsService', 'collectionSwitched', (data) => {
-				this.#onCollectionSwitched(data as CollectionModel)
-			})
-			await connection.subscribe('SceneCollectionsService', 'collectionAdded', () => this.#scheduleCollectionResync())
-			await connection.subscribe('SceneCollectionsService', 'collectionRemoved', () => this.#scheduleCollectionResync())
-			await connection.subscribe('SceneCollectionsService', 'collectionUpdated', () => this.#scheduleCollectionResync())
-			await connection.subscribe('TransitionsService', 'studioModeChanged', (data) => {
-				this.#onStudioModeChanged(data)
-			})
+	#clearSyncRetry(): void {
+		if (this.#syncRetryTimer) {
+			clearTimeout(this.#syncRetryTimer)
+			this.#syncRetryTimer = null
+		}
+	}
 
+	/** While disconnected the mirrored live state is unknown: report it as offline rather than frozen */
+	#publishOfflineState(): void {
+		this.state.streamingStatus = 'offline'
+		this.state.recordingStatus = 'offline'
+		this.state.replayBufferStatus = 'offline'
+		this.state.streamingStatusTime = null
+		this.state.recordingStatusTime = null
+		this.state.performance = { cpu: 0, fps: 0, droppedFrames: 0, droppedFramesPercent: 0 }
+		this.refreshAllVariables()
+		this.checkFeedbacks(...ALL_FEEDBACKS)
+	}
+
+	/** Register every event subscription. Registered once per connection, while not yet authenticated:
+	 * the connection activates them during each auth handshake, before 'connected' fires,
+	 * so no change can be missed while the initial sync runs. */
+	#registerSubscriptions(connection: SlobsConnection): void {
+		// Not yet authenticated, so these only record the subscription and resolve immediately
+		void connection.subscribe('ScenesService', 'sceneSwitched', (data) => {
+			this.#onSceneSwitched(data as SceneModel)
+		})
+		void connection.subscribe('ScenesService', 'sceneAdded', () => this.#scheduleSceneResync())
+		void connection.subscribe('ScenesService', 'sceneRemoved', () => this.#scheduleSceneResync())
+		void connection.subscribe('ScenesService', 'itemAdded', () => this.#scheduleSceneResync())
+		void connection.subscribe('ScenesService', 'itemRemoved', () => this.#scheduleSceneResync())
+		void connection.subscribe('ScenesService', 'itemUpdated', (data) => {
+			this.#onItemUpdated(data as SceneNodeModel)
+		})
+		void connection.subscribe('StreamingService', 'streamingStatusChange', (data) => {
+			this.#onStreamingStatusChange(data)
+		})
+		void connection.subscribe('StreamingService', 'recordingStatusChange', (data) => {
+			this.#onRecordingStatusChange(data)
+		})
+		void connection.subscribe('StreamingService', 'replayBufferStatusChange', (data) => {
+			this.#onReplayBufferStatusChange(data)
+		})
+		void connection.subscribe('SourcesService', 'sourceUpdated', (data) => {
+			this.#onSourceUpdated(data as SourceModel)
+		})
+		void connection.subscribe('SceneCollectionsService', 'collectionSwitched', (data) => {
+			this.#onCollectionSwitched(data as CollectionModel)
+		})
+		void connection.subscribe('SceneCollectionsService', 'collectionAdded', () => this.#scheduleCollectionResync())
+		void connection.subscribe('SceneCollectionsService', 'collectionRemoved', () => this.#scheduleCollectionResync())
+		void connection.subscribe('SceneCollectionsService', 'collectionUpdated', () => this.#scheduleCollectionResync())
+		void connection.subscribe('TransitionsService', 'studioModeChanged', (data) => {
+			this.#onStudioModeChanged(data)
+		})
+	}
+
+	/** Initial state sync, run after every successful (re)connection and retried while it fails */
+	async #onConnected(connection: SlobsConnection): Promise<void> {
+		this.#clearSyncRetry()
+		if (this.connection !== connection || !connection.isConnected) return
+
+		try {
 			await this.#syncState(connection)
 
-			// The connection may have dropped while we were syncing
+			// The connection may have dropped or been replaced while we were syncing
 			if (this.connection !== connection || !connection.isConnected) return
 
 			this.updateStatus(InstanceStatus.Ok)
@@ -208,7 +276,13 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error)
 			this.log('error', `Initial state sync failed: ${message}`)
+			// A newer connection owns the status from here
+			if (this.connection !== connection || !connection.isConnected) return
 			this.updateStatus(InstanceStatus.UnknownError, `State sync failed: ${message}`)
+			this.#syncRetryTimer = setTimeout(() => {
+				this.#syncRetryTimer = null
+				void this.#onConnected(connection)
+			}, SYNC_RETRY_MS)
 		}
 	}
 
@@ -238,17 +312,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 		this.refreshDefinitions()
 		this.refreshAllVariables()
-		this.checkFeedbacks(
-			'scene_active',
-			'streaming_active',
-			'recording_active',
-			'audio_muted',
-			'item_visible',
-			'collection_active',
-			'replay_buffer_active',
-			'studio_mode_active',
-			'dropped_frames_above',
-		)
+		this.checkFeedbacks(...ALL_FEEDBACKS)
 	}
 
 	async #fetchAudioSources(connection: SlobsConnection): Promise<AudioSourceModel[]> {

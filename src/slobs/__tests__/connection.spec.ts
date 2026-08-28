@@ -209,9 +209,115 @@ describe('JSON-RPC correlation', () => {
 
 		await expect(promise).resolves.toEqual({ done: true })
 	})
+
+	it('rejects async API methods whose deferred result never arrives', async () => {
+		const harness = createHarness()
+		harness.connection.start()
+		completeAuth(harness)
+
+		const promise = harness.connection.request('SceneCollectionsService', 'load')
+		const request = harness.socket().lastRequest()
+		harness.socket().respondTo(request, {
+			_type: 'SUBSCRIPTION',
+			resourceId: 'promise-43',
+			emitter: 'PROMISE',
+		})
+
+		const assertion = expect(promise).rejects.toThrow(/timed out .* deferred result/)
+		vi.advanceTimersByTime(60001) // the deferred result gets its own, longer timeout
+		await assertion
+	})
+
+	it('propagates the error payload of rejected async API methods', async () => {
+		const harness = createHarness()
+		harness.connection.start()
+		completeAuth(harness)
+
+		const promise = harness.connection.request('SceneCollectionsService', 'load')
+		const request = harness.socket().lastRequest()
+		harness.socket().respondTo(request, {
+			_type: 'SUBSCRIPTION',
+			resourceId: 'promise-44',
+			emitter: 'PROMISE',
+		})
+		harness.socket().receive({
+			jsonrpc: '2.0',
+			id: null,
+			result: {
+				_type: 'EVENT',
+				resourceId: 'promise-44',
+				emitter: 'PROMISE',
+				isRejected: true,
+				data: { message: 'collection is locked' },
+			},
+		})
+
+		await expect(promise).rejects.toThrow(/collection is locked/)
+	})
 })
 
 describe('event subscriptions', () => {
+	it('still connects when a subscription channel is rejected during the handshake', async () => {
+		const harness = createHarness()
+		const connected = vi.fn()
+		harness.connection.on('connected', connected)
+
+		// Subscriptions registered before start(), as the module does
+		const okHandler = vi.fn()
+		void harness.connection.subscribe('ScenesService', 'sceneSwitched', okHandler)
+		void harness.connection.subscribe('StreamingService', 'replayBufferStatusChange', vi.fn())
+
+		harness.connection.start()
+		harness.socket().open()
+		harness.socket().respondTo(harness.socket().lastRequest(), true) // auth ok
+
+		// First subscription is accepted
+		await vi.waitFor(() => expect(harness.socket().lastRequest().method).toBe('sceneSwitched'))
+		harness.socket().respondTo(harness.socket().lastRequest(), {
+			_type: 'SUBSCRIPTION',
+			resourceId: 'ScenesService.sceneSwitched',
+			emitter: 'STREAM',
+		})
+
+		// Second one is rejected (e.g. a Streamlabs version without this channel)
+		await vi.waitFor(() => expect(harness.socket().lastRequest().method).toBe('replayBufferStatusChange'))
+		harness.socket().receive({
+			jsonrpc: '2.0',
+			id: harness.socket().lastRequest().id,
+			error: { code: -32601, message: 'Method not found' },
+		})
+
+		// The handshake must complete anyway, with the working subscription active
+		await vi.waitFor(() => expect(connected).toHaveBeenCalledOnce())
+		expect(harness.connection.isConnected).toBe(true)
+		expect(harness.logs.join('\n')).toMatch(/Could not subscribe to StreamingService.replayBufferStatusChange/)
+
+		harness.socket().receive({
+			jsonrpc: '2.0',
+			id: null,
+			result: {
+				_type: 'EVENT',
+				resourceId: 'ScenesService.sceneSwitched',
+				emitter: 'STREAM',
+				data: { id: 'scene_2', name: 'Scene 2' },
+			},
+		})
+		expect(okHandler).toHaveBeenCalledWith({ id: 'scene_2', name: 'Scene 2' })
+	})
+
+	it('counts a failed auth request towards the reconnect backoff', async () => {
+		const harness = createHarness()
+		const disconnected = vi.fn()
+		harness.connection.on('disconnected', disconnected)
+
+		harness.connection.start()
+		harness.socket().open()
+		// The auth request never gets an answer and times out
+		await vi.advanceTimersByTimeAsync(10001)
+
+		expect(disconnected).toHaveBeenCalledWith(expect.stringContaining('auth request failed'), 1)
+	})
+
 	it('dispatches STREAM events to the subscribed handler', async () => {
 		const harness = createHarness()
 		harness.connection.start()

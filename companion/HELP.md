@@ -95,7 +95,7 @@ Drop them from the Presets tab onto your buttons and you are done.
 - `OK`: authenticated and synced.
 - `Authentication failure`: the token was rejected. Re-copy it from Settings > Remote Control (Show details), or generate a new one.
 - `Disconnected` / `Connection failure`: Streamlabs Desktop is closed or unreachable. The module reconnects automatically with a progressive backoff and resynchronizes everything as soon as Streamlabs is back.
-- `Bad configuration`: the token is missing in the module configuration.
+- `Bad configuration`: the host, port or API token is missing in the module configuration (the status message says which).
 
 Notes:
 

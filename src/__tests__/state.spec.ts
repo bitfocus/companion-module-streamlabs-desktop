@@ -145,16 +145,25 @@ describe('audio source variables', () => {
 		expect(sanitizeVariableId('  --  ')).toBe('source')
 	})
 
-	it('deduplicates colliding variable ids', () => {
+	it('deduplicates colliding variable ids with a stable sourceId suffix', () => {
 		const state = new SlobsState()
 		state.setAudioSources([
 			{ sourceId: 'a', name: 'Mic/Aux', muted: false },
 			{ sourceId: 'b', name: 'Mic Aux', muted: true },
 		])
-		const ids = state.audioSources.map((source) => source.variableId)
-		expect(ids[0]).toBe('mute_Mic_Aux')
-		expect(ids[1]).toBe('mute_Mic_Aux_')
-		expect(new Set(ids).size).toBe(2)
+		expect(state.audioSources.map((source) => source.variableId)).toEqual(['mute_Mic_Aux_a', 'mute_Mic_Aux_b'])
+	})
+
+	it('assigns colliding ids independently of the list order, and the plain id when unique', () => {
+		const state = new SlobsState()
+		state.setAudioSources([
+			{ sourceId: 'b', name: 'Mic Aux', muted: true },
+			{ sourceId: 'a', name: 'Mic/Aux', muted: false },
+		])
+		expect(state.audioSources.map((source) => source.variableId)).toEqual(['mute_Mic_Aux_b', 'mute_Mic_Aux_a'])
+
+		state.setAudioSources([{ sourceId: 'b', name: 'Mic Aux', muted: true }])
+		expect(state.audioSources[0]?.variableId).toBe('mute_Mic_Aux')
 	})
 
 	it('applies mute changes only to known sources', () => {

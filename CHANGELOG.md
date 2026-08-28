@@ -3,6 +3,28 @@
 All notable changes to this module are documented in this file.
 Versions follow [semantic versioning](https://semver.org/).
 
+## v1.0.2 (2026-08-28)
+
+Store review fixes, following the feedback on the v1.0.1 submission, plus robustness fixes found by a full pre-resubmission review.
+
+### Store review
+
+- Remove the `streamlabs-obs` legacy id from the manifest: this is the initial release, so there is no older module to migrate from
+- Rework the manifest keywords (`streaming`, `recording`, `scenes`, `live`): the module is already searchable via its manufacturer and shortname, and `obs` conflated it with the OBS Studio module
+- Rename the manifest product to `Desktop` so the module lists as "Streamlabs: Desktop", following the "OBS: Studio" convention
+- Remove the `CONFIG_DEFAULTS` fallback: defaults belong to the config field definitions, and future config migrations belong in upgrade scripts
+
+### Robustness
+
+- A rejected API token now keeps the connection status on "Authentication failure" instead of immediately overwriting it with "Disconnected" / "Connection failure"
+- A failed initial state sync is now retried every 5 seconds instead of leaving the connection stuck in an error state while the transport is up
+- Event subscriptions are registered once per connection: reconnections no longer subscribe every channel twice. An event channel rejected by Streamlabs (e.g. missing from an older version) is logged and skipped instead of aborting the whole handshake
+- A failed authentication request now counts towards the reconnect backoff instead of retrying at full speed forever
+- Async API calls (emitter `PROMISE`) now get a dedicated 60 s timeout for their deferred result instead of waiting forever, and report the error payload when Streamlabs rejects them
+- All variables are published with default values at startup, so buttons no longer show `$NA` before the first connection
+- Streaming, recording, replay buffer and performance variables and feedbacks reset to offline while disconnected, instead of freezing on their last live value
+- Audio sources with colliding names now get a stable `sourceId`-based variable id, instead of an order-dependent underscore suffix that could silently swap between sources after a resync
+
 ## v1.0.1 (2026-07-16)
 
 Maintenance release. No functional change; dependency and tooling updates only.
@@ -14,7 +36,7 @@ Maintenance release. No functional change; dependency and tooling updates only.
 
 ## v1.0.0 (2026-07-15)
 
-First public release of the native Streamlabs Desktop module for Bitfocus Companion, filling the gap left by the never-implemented `streamlabs-obs` stub (kept as a `legacyId` for store retro-compatibility).
+First public release of the native Streamlabs Desktop module for Bitfocus Companion, filling the gap left by the never-implemented `streamlabs-obs` stub.
 
 The module talks to the Streamlabs Desktop remote control API (JSON-RPC 2.0 over SockJS, port 59650, token auth) and mirrors its state in real time.
 

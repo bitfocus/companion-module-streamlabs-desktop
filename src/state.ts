@@ -138,11 +138,20 @@ export class SlobsState {
 		return item
 	}
 
-	/** Replace the audio source list, assigning a unique Companion variable id per source */
+	/** Replace the audio source list, assigning a unique Companion variable id per source.
+	 * Colliding names are suffixed with the stable sourceId, so an id never designates a
+	 * different source after a resync reorders or shrinks the list. */
 	setAudioSources(sources: Array<{ sourceId: string; name: string; muted: boolean }>): void {
+		const baseCounts = new Map<string, number>()
+		for (const source of sources) {
+			const base = `mute_${sanitizeVariableId(source.name)}`
+			baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1)
+		}
+
 		const usedIds = new Set<string>()
 		this.audioSources = sources.map((source) => {
-			let variableId = `mute_${sanitizeVariableId(source.name)}`
+			const base = `mute_${sanitizeVariableId(source.name)}`
+			let variableId = (baseCounts.get(base) ?? 0) > 1 ? `${base}_${sanitizeVariableId(source.sourceId)}` : base
 			while (usedIds.has(variableId)) variableId += '_'
 			usedIds.add(variableId)
 			return { ...source, variableId }
