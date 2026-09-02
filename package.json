@@ -33,7 +33,7 @@
 	},
 	"devDependencies": {
 		"@companion-module/tools": "^3.1.0",
-		"@types/node": "^26.2.0",
+		"@types/node": "^26.4.0",
 		"@types/sockjs-client": "^1.5.4",
 		"eslint": "^10.9.0",
 		"husky": "^9.1.7",
