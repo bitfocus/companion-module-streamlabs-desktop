@@ -3,6 +3,22 @@
 All notable changes to this module are documented in this file.
 Versions follow [semantic versioning](https://semver.org/).
 
+## v1.1.0 (2026-09-25)
+
+Scene item visibility now works on scene collections that have used dual output, where show / hide / toggle often seemed to do nothing, especially on cameras.
+
+### Scene item visibility
+
+- Fix: a collection that has ever been in dual output mode holds a horizontal and a vertical copy of every source, with the same name, even once dual output is turned off. The dropdowns listed both copies with identical labels, so an action could silently target the vertical copy instead of the main output. Each source is now listed once
+- Fix: sources sharing a name within a scene (e.g. the same camera in a `16x9` and a `9x16` folder) are told apart by their folder path in the dropdowns
+- New **Display** option on the action (horizontal, vertical or both displays) and on the `item_visible` feedback (horizontal or vertical). Horizontal, the main output, is the default; existing buttons are upgraded to it, including those set up on a vertical copy
+- Scene item API resources are now JSON-encoded, so ids with special characters can no longer break the request
+
+### Dependencies
+
+- Update `@companion-module/base` to 2.1.3
+- Update dev tooling: `vitest` to 5.0 (with its now required `vite` peer), `eslint` 10.11, `typescript-eslint` 8.70, `prettier` 3.9.8, `lint-staged` 17.5.1, `@types/node` 26.6
+
 ## v1.0.2 (2026-08-28)
 
 Store review fixes, following the feedback on the v1.0.1 submission, plus robustness fixes found by a full pre-resubmission review.
