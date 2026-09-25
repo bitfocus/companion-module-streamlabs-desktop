@@ -73,11 +73,16 @@ export interface SceneNodeModel {
 	name?: string
 	parentId?: string
 	childrenIds?: string[]
+	/** Output display of the node; dual output scene collections hold one copy per display */
+	display?: 'horizontal' | 'vertical'
 	// item only
 	sceneItemId?: string
 	sourceId?: string
 	visible?: boolean
 }
+
+/** Returned by DualOutputService.sceneNodeMaps: per scene id, horizontal node id -> vertical node id */
+export type SceneNodeMaps = Record<string, Record<string, string>>
 
 /** Model returned by StreamingService.getModel */
 export interface StreamingModel {

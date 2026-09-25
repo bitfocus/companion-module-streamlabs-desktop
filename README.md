@@ -9,7 +9,7 @@ See [HELP.md](./companion/HELP.md) for user documentation (how to get the API to
 - Connection to a local Streamlabs Desktop instance with token auth, automatic reconnection with backoff, full state resync after reconnect, Companion status reporting
 - Scenes: set active scene (dropdown or by name with variable support and optional case-insensitive matching), `scene_active` feedback, `current_scene` variables, real-time updates on manual scene switches
 - Scene collections: switch action, `collection_active` feedback, `current_collection` variable, automatic resync on collection changes
-- Source visibility: show / hide / toggle any scene item, `item_visible` feedback, real-time tracking
+- Source visibility: show / hide / toggle any scene item, `item_visible` feedback, real-time tracking, dual output aware (horizontal, vertical or both displays)
 - Streaming / recording: toggle, start and stop actions (status-checked), feedbacks, raw status variables and `stream_duration` / `recording_duration` live timers
 - Replay buffer: toggle / start / stop / save actions, feedback and status variables
 - Studio mode: toggle / enable / disable / execute transition (refused by Streamlabs while dual output is enabled)
@@ -98,5 +98,6 @@ The script connects, authenticates, lists scenes, then listens for `sceneSwitche
 - The API only exposes `toggleStreaming` / `toggleRecording`; explicit start / stop refetch `getModel` first so a stale state can never invert the intent.
 - Mute uses the documented `AudioSource["<id>"].setMuted`, with `SourcesService.setMuted` kept as a fallback (both verified live).
 - Scene item visibility uses `SceneItem["<sceneId>","<sceneItemId>","<sourceId>"].setVisibility` (verified live, with `itemUpdated` events).
+- A collection that has ever been in dual output mode holds two copies of every scene item (`display: horizontal` / `vertical`, same source and name), even once dual output is turned off. `DualOutputService.sceneNodeMaps` pairs them (per scene, horizontal node id -> vertical node id). `setVisibility` only updates the copy it is called on, whereas the Streamlabs source list and hotkeys can update both.
 - `StreamingService.getModel` also carries `replayBufferStatus`, the `*StatusTime` timestamps used by the duration timers, and per-context statuses when dual output is enabled.
 - Streamlabs silently refuses `enableStudioMode` while dual output is enabled; the module refetches the state after the call and warns instead of trusting the event.

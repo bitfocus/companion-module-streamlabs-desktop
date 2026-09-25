@@ -1,5 +1,6 @@
 import type { DropdownChoice } from '@companion-module/base'
 import type ModuleInstance from './main.js'
+import { parseSceneItemDisplayTarget, sceneItemLabel } from './state.js'
 
 export type ActionsSchema = {
 	set_scene: {
@@ -38,6 +39,7 @@ export type ActionsSchema = {
 		options: {
 			item: string
 			mode: string
+			display: string
 		}
 	}
 	studio_mode_toggle: { options: Record<string, never> }
@@ -55,7 +57,14 @@ export function audioSourceChoices(self: ModuleInstance): DropdownChoice[] {
 }
 
 export function sceneItemChoices(self: ModuleInstance): DropdownChoice[] {
-	return self.state.sceneItems.map((item) => ({ id: item.key, label: `${item.sceneName}: ${item.name}` }))
+	// Items with the same name in the same folder stay apart through a counter
+	const seen = new Map<string, number>()
+	return self.state.selectableSceneItems.map((item) => {
+		const label = sceneItemLabel(item)
+		const count = (seen.get(label) ?? 0) + 1
+		seen.set(label, count)
+		return { id: item.key, label: count > 1 ? `${label} (${count})` : label }
+	})
 }
 
 export function collectionChoices(self: ModuleInstance): DropdownChoice[] {
@@ -67,6 +76,9 @@ const VISIBILITY_MODES: DropdownChoice[] = [
 	{ id: 'hide', label: 'Hide' },
 	{ id: 'toggle', label: 'Toggle' },
 ]
+
+export const DUAL_OUTPUT_DISPLAY_TOOLTIP =
+	'Dual output scene collections hold a copy of each scene item per display. Ignored for items that exist on a single display.'
 
 export function UpdateActions(self: ModuleInstance): void {
 	const scenes = sceneChoices(self)
@@ -250,10 +262,22 @@ export function UpdateActions(self: ModuleInstance): void {
 					choices: VISIBILITY_MODES,
 					default: 'toggle',
 				},
+				{
+					id: 'display',
+					type: 'dropdown',
+					label: 'Display',
+					choices: [
+						{ id: 'horizontal', label: 'Horizontal' },
+						{ id: 'vertical', label: 'Vertical' },
+						{ id: 'both', label: 'Both displays' },
+					],
+					default: 'horizontal',
+					tooltip: `${DUAL_OUTPUT_DISPLAY_TOOLTIP} "Both displays" keeps the two copies in sync, like Streamlabs hotkeys.`,
+				},
 			],
 			callback: async (event) => {
 				const desired = event.options.mode === 'toggle' ? 'toggle' : event.options.mode === 'show'
-				await self.setSceneItemVisible(event.options.item, desired)
+				await self.setSceneItemVisible(event.options.item, desired, parseSceneItemDisplayTarget(event.options.display))
 			},
 		},
 		studio_mode_toggle: {

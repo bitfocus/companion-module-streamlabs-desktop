@@ -3,12 +3,16 @@
  * Filled by the initial sync after (re)connection, kept up to date by event subscriptions.
  */
 
-import type { SceneModel } from './slobs/types.js'
+import type { SceneModel, SceneNodeMaps, SceneNodeModel } from './slobs/types.js'
 
 export interface SlobsScene {
 	id: string
 	name: string
 }
+
+export type SceneItemDisplay = 'horizontal' | 'vertical'
+/** Which copies of a dual output scene item an action or feedback targets */
+export type SceneItemDisplayTarget = 'both' | SceneItemDisplay
 
 export interface SlobsSceneItem {
 	/** Stable option value used in dropdowns: `${sceneId}::${sceneItemId}` */
@@ -19,6 +23,12 @@ export interface SlobsSceneItem {
 	sourceId: string
 	name: string
 	visible: boolean
+	/** Names of the folders holding the item, outermost first */
+	folders: string[]
+	/** Always horizontal outside dual output scene collections */
+	display: SceneItemDisplay
+	/** Key of the copy of this item on the other display, in dual output scene collections */
+	partnerKey: string | null
 }
 
 export interface SlobsAudioSource {
@@ -52,6 +62,21 @@ export function sanitizeVariableId(name: string): string {
 
 export function buildSceneItemKey(sceneId: string, sceneItemId: string): string {
 	return `${sceneId}::${sceneItemId}`
+}
+
+/** API resource of a scene item, e.g. `SceneItem["<sceneId>","<sceneItemId>","<sourceId>"]` */
+export function buildSceneItemResource(item: SlobsSceneItem): string {
+	return `SceneItem${JSON.stringify([item.sceneId, item.sceneItemId, item.sourceId])}`
+}
+
+/** Dropdown label: the folder path tells apart items sharing a name within a scene */
+export function sceneItemLabel(item: SlobsSceneItem): string {
+	const path = [...item.folders, item.name].join(' / ')
+	return `${item.sceneName}: ${path}${item.display === 'vertical' ? ' (vertical)' : ''}`
+}
+
+export function parseSceneItemDisplayTarget(value: unknown): SceneItemDisplayTarget {
+	return value === 'vertical' || value === 'both' ? value : 'horizontal'
 }
 
 export class SlobsState {
@@ -98,22 +123,60 @@ export class SlobsState {
 		return this.replayBufferStatus !== 'offline'
 	}
 
-	/** Extract scenes and their items (folders flattened away) from full scene models */
-	setScenes(scenes: SceneModel[]): void {
+	/** Extract scenes and their items (folders flattened away) from full scene models.
+	 * The dual output node maps pair the horizontal and vertical copies of each item. */
+	setScenes(scenes: SceneModel[], nodeMaps: SceneNodeMaps = {}): void {
 		this.scenes = scenes.map((scene) => ({ id: scene.id, name: scene.name }))
-		this.sceneItems = scenes.flatMap((scene) =>
-			(scene.nodes ?? [])
-				.filter((node) => node.sceneNodeType === 'item' && node.sceneItemId && node.sourceId)
-				.map((node) => ({
-					key: buildSceneItemKey(scene.id, node.sceneItemId as string),
+		this.sceneItems = scenes.flatMap((scene) => {
+			const nodes = scene.nodes ?? []
+			const folders = new Map(nodes.filter((node) => node.sceneNodeType === 'folder').map((node) => [node.id, node]))
+			// Membership is carried by the child's parentId and/or the folder's childrenIds
+			const parentIds = new Map<string, string>()
+			for (const folder of folders.values()) {
+				for (const childId of folder.childrenIds ?? []) parentIds.set(childId, folder.id)
+			}
+			const folderPath = (node: SceneNodeModel): string[] => {
+				const path: string[] = []
+				let folder = folders.get(node.parentId || parentIds.get(node.id) || '')
+				// The depth bound guards against a malformed, cyclic tree
+				while (folder && path.length < folders.size) {
+					path.unshift(folder.name?.trim() || folder.id)
+					folder = folders.get(folder.parentId || parentIds.get(folder.id) || '')
+				}
+				return path
+			}
+
+			const byNodeId = new Map<string, SlobsSceneItem>()
+			for (const node of nodes) {
+				if (node.sceneNodeType !== 'item' || !node.sceneItemId || !node.sourceId) continue
+				byNodeId.set(node.id, {
+					key: buildSceneItemKey(scene.id, node.sceneItemId),
 					sceneId: scene.id,
 					sceneName: scene.name,
-					sceneItemId: node.sceneItemId as string,
-					sourceId: node.sourceId as string,
-					name: node.name ?? (node.sceneItemId as string),
+					sceneItemId: node.sceneItemId,
+					sourceId: node.sourceId,
+					name: node.name ?? node.sceneItemId,
 					visible: node.visible ?? true,
-				})),
-		)
+					folders: folderPath(node),
+					display: node.display === 'vertical' ? 'vertical' : 'horizontal',
+					partnerKey: null,
+				})
+			}
+
+			for (const [horizontalId, verticalId] of Object.entries(nodeMaps[scene.id] ?? {})) {
+				const horizontal = byNodeId.get(horizontalId)
+				const vertical = byNodeId.get(verticalId)
+				if (horizontal?.display !== 'horizontal' || vertical?.display !== 'vertical') continue
+				horizontal.partnerKey = vertical.key
+				vertical.partnerKey = horizontal.key
+			}
+			return [...byNodeId.values()]
+		})
+	}
+
+	/** Items offered in dropdowns: a dual output pair is listed once, through its horizontal copy */
+	get selectableSceneItems(): SlobsSceneItem[] {
+		return this.sceneItems.filter((item) => item.display === 'horizontal' || item.partnerKey === null)
 	}
 
 	setActiveScene(sceneId: string | null): void {
@@ -128,6 +191,17 @@ export class SlobsState {
 
 	findSceneItem(key: string): SlobsSceneItem | undefined {
 		return this.sceneItems.find((item) => item.key === key)
+	}
+
+	/** Copies of an item to target, the selected one first. The display only filters dual output pairs:
+	 * an item that exists on a single display always resolves to itself. */
+	resolveSceneItems(key: string, display: SceneItemDisplayTarget): SlobsSceneItem[] {
+		const item = this.findSceneItem(key)
+		if (!item) return []
+		const partner = item.partnerKey === null ? undefined : this.findSceneItem(item.partnerKey)
+		if (!partner) return [item]
+		if (display === 'both') return [item, partner]
+		return [item, partner].filter((copy) => copy.display === display)
 	}
 
 	/** Returns the updated item when it is known and the visibility changed */

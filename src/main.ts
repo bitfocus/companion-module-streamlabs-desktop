@@ -11,12 +11,13 @@ import type {
 	CollectionModel,
 	PerformanceModel,
 	SceneModel,
+	SceneNodeMaps,
 	SceneNodeModel,
 	SourceModel,
 	StreamingModel,
 	TransitionsModel,
 } from './slobs/types.js'
-import { SlobsState } from './state.js'
+import { SlobsState, buildSceneItemResource, type SceneItemDisplayTarget } from './state.js'
 import { extractStatus, formatDuration } from './util.js'
 
 export type ModuleSchema = {
@@ -289,6 +290,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	/** Full fetch of everything we mirror, then refresh all definitions, variables and feedbacks */
 	async #syncState(connection: SlobsConnection): Promise<void> {
 		const scenes = await connection.request<SceneModel[]>('ScenesService', 'getScenes')
+		const nodeMaps = await this.#fetchSceneNodeMaps(connection)
 		const activeSceneId = await connection.request<string>('ScenesService', 'activeSceneId')
 		const streamingModel = await connection.request<StreamingModel>('StreamingService', 'getModel')
 		const audioSources = await this.#fetchAudioSources(connection)
@@ -296,7 +298,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		const activeCollection = await connection.request<CollectionModel>('SceneCollectionsService', 'activeCollection')
 		const transitions = await connection.request<TransitionsModel>('TransitionsService', 'getModel')
 
-		this.state.setScenes(scenes)
+		this.state.setScenes(scenes, nodeMaps)
 		this.state.setActiveScene(activeSceneId)
 		this.#applyStreamingModel(streamingModel)
 		this.state.setAudioSources(
@@ -313,6 +315,16 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		this.refreshDefinitions()
 		this.refreshAllVariables()
 		this.checkFeedbacks(...ALL_FEEDBACKS)
+	}
+
+	/** Pairs of dual output scene items; empty for other collections and older Streamlabs versions */
+	async #fetchSceneNodeMaps(connection: SlobsConnection): Promise<SceneNodeMaps> {
+		try {
+			return (await connection.request<SceneNodeMaps | null>('DualOutputService', 'sceneNodeMaps')) ?? {}
+		} catch (error) {
+			this.log('debug', `Dual output node maps unavailable: ${String(error)}`)
+			return {}
+		}
 	}
 
 	async #fetchAudioSources(connection: SlobsConnection): Promise<AudioSourceModel[]> {
@@ -437,8 +449,9 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		if (!connection || !connection.isConnected) return
 		try {
 			const scenes = await connection.request<SceneModel[]>('ScenesService', 'getScenes')
+			const nodeMaps = await this.#fetchSceneNodeMaps(connection)
 			const activeSceneId = await connection.request<string>('ScenesService', 'activeSceneId')
-			this.state.setScenes(scenes)
+			this.state.setScenes(scenes, nodeMaps)
 			this.state.setActiveScene(activeSceneId)
 			this.log(
 				'debug',
@@ -730,18 +743,27 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		}
 	}
 
-	async setSceneItemVisible(itemKey: string, desired: boolean | 'toggle'): Promise<void> {
+	/**
+	 * SceneItem.setVisibility only updates the copy it is called on. Targeting both displays of a dual output
+	 * item updates the partner copy first, then the picked one, as Streamlabs hotkeys do.
+	 */
+	async setSceneItemVisible(
+		itemKey: string,
+		desired: boolean | 'toggle',
+		display: SceneItemDisplayTarget,
+	): Promise<void> {
 		const connection = this.getConnectionForAction('scene item visibility')
 		if (!connection) return
 
-		const item = this.state.findSceneItem(itemKey)
-		if (!item) {
+		const [picked, partner] = this.state.resolveSceneItems(itemKey, display)
+		if (!picked) {
 			this.log('error', `Scene item ${itemKey} is not known (removed or scene changed?)`)
 			return
 		}
-		const visible = desired === 'toggle' ? !item.visible : desired
-		const resource = `SceneItem["${item.sceneId}","${item.sceneItemId}","${item.sourceId}"]`
-		await connection.request(resource, 'setVisibility', visible)
+		// A toggle follows the copy picked in the dropdown, or the only copy on the requested display
+		const visible = desired === 'toggle' ? !picked.visible : desired
+		if (partner) await connection.request(buildSceneItemResource(partner), 'setVisibility', visible)
+		await connection.request(buildSceneItemResource(picked), 'setVisibility', visible)
 	}
 
 	async setCollectionActive(collectionId: string): Promise<void> {

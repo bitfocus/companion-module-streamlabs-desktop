@@ -1,6 +1,12 @@
 import { combineRgb } from '@companion-module/base'
 import type ModuleInstance from './main.js'
-import { audioSourceChoices, collectionChoices, sceneChoices, sceneItemChoices } from './actions.js'
+import {
+	DUAL_OUTPUT_DISPLAY_TOOLTIP,
+	audioSourceChoices,
+	collectionChoices,
+	sceneChoices,
+	sceneItemChoices,
+} from './actions.js'
 
 export type FeedbacksSchema = {
 	scene_active: {
@@ -31,6 +37,7 @@ export type FeedbacksSchema = {
 		type: 'boolean'
 		options: {
 			item: string
+			display: string
 		}
 	}
 	collection_active: {
@@ -156,9 +163,21 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 					choices: sceneItems,
 					default: sceneItems[0]?.id ?? '',
 				},
+				{
+					id: 'display',
+					type: 'dropdown',
+					label: 'Display',
+					choices: [
+						{ id: 'horizontal', label: 'Horizontal' },
+						{ id: 'vertical', label: 'Vertical' },
+					],
+					default: 'horizontal',
+					tooltip: DUAL_OUTPUT_DISPLAY_TOOLTIP,
+				},
 			],
 			callback: (feedback) => {
-				return self.state.findSceneItem(feedback.options.item)?.visible === true
+				const display = feedback.options.display === 'vertical' ? 'vertical' : 'horizontal'
+				return self.state.resolveSceneItems(feedback.options.item, display)[0]?.visible === true
 			},
 		},
 		collection_active: {

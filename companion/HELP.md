@@ -39,22 +39,22 @@ If you ever need to revoke access, use **Generate new token** in the same screen
 | Recording: Toggle / Start / Stop                            | Control the recording, same behaviour as streaming.                                              |
 | Replay buffer: Toggle / Start / Stop / Save replay          | Control the replay buffer and save it to disk while it is running.                               |
 | Audio: Mute / unmute source                                 | Mute, unmute or toggle any audio source.                                                         |
-| Source: Show / hide scene item                              | Show, hide or toggle any source of any scene.                                                    |
+| Source: Show / hide scene item                              | Show, hide or toggle any source of any scene, on the horizontal, vertical or both displays.      |
 | Studio mode: Toggle / Enable / Disable / Execute transition | Control studio mode and send the preview to program.                                             |
 
 ## Feedbacks
 
-| Feedback                       | Description                                                                    |
-| ------------------------------ | ------------------------------------------------------------------------------ |
-| Scene is active                | Button style changes while the selected scene is on air (default red).         |
-| Streaming is active            | Active while the stream is starting, live, ending or reconnecting.             |
-| Recording is active            | Active while the recording is starting, running, stopping or writing.          |
-| Replay buffer is running       | Active while the replay buffer runs (default green).                           |
-| Audio source is muted          | Active while the selected audio source is muted.                               |
-| Scene item is visible          | Active while the selected source is visible in its scene (default green).      |
-| Scene collection is active     | Active while the selected collection is loaded.                                |
-| Studio mode is enabled         | Active while studio mode is on (default orange).                               |
-| Dropped frames above threshold | Active when the dropped frames percentage reaches your threshold (default 1%). |
+| Feedback                       | Description                                                                        |
+| ------------------------------ | ---------------------------------------------------------------------------------- |
+| Scene is active                | Button style changes while the selected scene is on air (default red).             |
+| Streaming is active            | Active while the stream is starting, live, ending or reconnecting.                 |
+| Recording is active            | Active while the recording is starting, running, stopping or writing.              |
+| Replay buffer is running       | Active while the replay buffer runs (default green).                               |
+| Audio source is muted          | Active while the selected audio source is muted.                                   |
+| Scene item is visible          | Active while the selected source is visible on the chosen display (default green). |
+| Scene collection is active     | Active while the selected collection is loaded.                                    |
+| Studio mode is enabled         | Active while studio mode is on (default orange).                                   |
+| Dropped frames above threshold | Active when the dropped frames percentage reaches your threshold (default 1%).     |
 
 ## Variables
 
@@ -100,5 +100,6 @@ Drop them from the Presets tab onto your buttons and you are done.
 Notes:
 
 - Studio mode is refused by Streamlabs Desktop when **dual output** is enabled; the module logs a warning in that case.
+- A scene collection that has ever used **dual output** keeps a horizontal and a vertical copy of each source, even once dual output is turned off. The scene item dropdowns list each source once, with its folder path; the **Display** option picks the copy to control (horizontal by default, the main output) or keeps both in sync.
 - The replay buffer must be enabled in the Streamlabs output settings for the replay actions to do anything.
 - Switching scene collections reloads all scenes and sources; the module resynchronizes itself once the new collection is loaded.

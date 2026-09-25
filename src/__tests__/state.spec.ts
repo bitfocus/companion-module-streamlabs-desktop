@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { SlobsState, sanitizeVariableId } from '../state.js'
+import {
+	SlobsState,
+	buildSceneItemResource,
+	parseSceneItemDisplayTarget,
+	sanitizeVariableId,
+	sceneItemLabel,
+} from '../state.js'
+import type { SceneNodeModel } from '../slobs/types.js'
 
 describe('scene name resolution', () => {
 	const state = new SlobsState()
@@ -83,6 +90,168 @@ describe('scene items', () => {
 		expect(state.applyItemVisibility('scene_1', 'item_2', true)?.visible).toBe(true)
 		expect(state.applyItemVisibility('scene_1', 'item_2', true)).toBeUndefined() // unchanged
 		expect(state.applyItemVisibility('scene_1', 'ghost', true)).toBeUndefined()
+	})
+})
+
+describe('dual output scene items', () => {
+	function item(id: string, name: string, display: 'horizontal' | 'vertical', visible: boolean): SceneNodeModel {
+		return {
+			id,
+			sceneId: 'scene_1',
+			sceneNodeType: 'item',
+			sceneItemId: id,
+			sourceId: `src_${name}`,
+			name,
+			display,
+			visible,
+		}
+	}
+
+	function makeState(withNodeMaps = true) {
+		const state = new SlobsState()
+		state.setScenes(
+			[
+				{
+					id: 'scene_1',
+					name: 'FaceCam + Chat',
+					nodes: [
+						item('v_cam', 'Facecam', 'vertical', true),
+						item('v_chat', 'Chat', 'vertical', false),
+						item('h_cam', 'Facecam', 'horizontal', false),
+						item('h_chat', 'Chat', 'horizontal', true),
+						item('v_only', 'Facecam 9x16', 'vertical', true),
+					],
+				},
+			],
+			withNodeMaps ? { scene_1: { h_cam: 'v_cam', h_chat: 'v_chat' } } : {},
+		)
+		return state
+	}
+
+	it('pairs the horizontal and vertical copies from the node maps', () => {
+		const state = makeState()
+		expect(state.findSceneItem('scene_1::h_cam')).toMatchObject({ display: 'horizontal', partnerKey: 'scene_1::v_cam' })
+		expect(state.findSceneItem('scene_1::v_cam')).toMatchObject({ display: 'vertical', partnerKey: 'scene_1::h_cam' })
+		expect(state.findSceneItem('scene_1::v_only')?.partnerKey).toBeNull()
+	})
+
+	it('lists a pair once, through its horizontal copy', () => {
+		const state = makeState()
+		expect(state.selectableSceneItems.map((sceneItem) => sceneItem.key)).toEqual([
+			'scene_1::h_cam',
+			'scene_1::h_chat',
+			'scene_1::v_only',
+		])
+	})
+
+	it('keeps every copy selectable when the node maps are unavailable', () => {
+		const state = makeState(false)
+		expect(state.selectableSceneItems).toHaveLength(5)
+		expect(state.resolveSceneItems('scene_1::v_cam', 'both').map((copy) => copy.key)).toEqual(['scene_1::v_cam'])
+	})
+
+	it('resolves the copies to target, the picked one first', () => {
+		const state = makeState()
+		const keys = (key: string, display: 'both' | 'horizontal' | 'vertical') =>
+			state.resolveSceneItems(key, display).map((copy) => copy.key)
+
+		expect(keys('scene_1::h_cam', 'both')).toEqual(['scene_1::h_cam', 'scene_1::v_cam'])
+		expect(keys('scene_1::v_cam', 'both')).toEqual(['scene_1::v_cam', 'scene_1::h_cam'])
+		expect(keys('scene_1::h_cam', 'vertical')).toEqual(['scene_1::v_cam'])
+		expect(keys('scene_1::v_cam', 'horizontal')).toEqual(['scene_1::h_cam'])
+		// A single display item ignores the display option
+		expect(keys('scene_1::v_only', 'horizontal')).toEqual(['scene_1::v_only'])
+		expect(keys('scene_1::ghost', 'both')).toEqual([])
+	})
+
+	it('ignores node map entries that do not pair a horizontal and a vertical item', () => {
+		const state = new SlobsState()
+		state.setScenes(
+			[
+				{
+					id: 'scene_1',
+					name: 'Scene',
+					nodes: [item('h_a', 'A', 'horizontal', true), item('h_b', 'B', 'horizontal', true)],
+				},
+			],
+			{ scene_1: { h_a: 'h_b', h_b: 'missing' } },
+		)
+		expect(state.sceneItems.every((sceneItem) => sceneItem.partnerKey === null)).toBe(true)
+	})
+
+	it('builds the API resource of a copy', () => {
+		const state = makeState()
+		const copy = state.findSceneItem('scene_1::v_cam')
+		expect(copy && buildSceneItemResource(copy)).toBe('SceneItem["scene_1","v_cam","src_Facecam"]')
+	})
+
+	it('defaults unknown display options to the horizontal display', () => {
+		expect(parseSceneItemDisplayTarget('vertical')).toBe('vertical')
+		expect(parseSceneItemDisplayTarget('both')).toBe('both')
+		expect(parseSceneItemDisplayTarget(undefined)).toBe('horizontal')
+		expect(parseSceneItemDisplayTarget('other')).toBe('horizontal')
+	})
+
+	it('labels single display vertical items', () => {
+		const state = makeState()
+		expect(state.selectableSceneItems.map(sceneItemLabel)).toEqual([
+			'FaceCam + Chat: Facecam',
+			'FaceCam + Chat: Chat',
+			'FaceCam + Chat: Facecam 9x16 (vertical)',
+		])
+	})
+})
+
+describe('scene item labels', () => {
+	function folder(id: string, name: string, parentId?: string): SceneNodeModel {
+		return { id, sceneId: 'scene_1', sceneNodeType: 'folder', name, parentId }
+	}
+
+	function camera(id: string, parentId?: string): SceneNodeModel {
+		return {
+			id,
+			sceneId: 'scene_1',
+			sceneNodeType: 'item',
+			sceneItemId: id,
+			sourceId: 'src_cam',
+			name: 'Facecam',
+			parentId,
+		}
+	}
+
+	it('tells apart items sharing a name with their folder path', () => {
+		const state = new SlobsState()
+		state.setScenes([
+			{
+				id: 'scene_1',
+				name: 'Ecran + Cam',
+				nodes: [
+					folder('f_16x9', '16x9'),
+					folder('f_cam_16x9', 'Camera', 'f_16x9'),
+					camera('cam_16x9', 'f_cam_16x9'),
+					folder('f_9x16', '9x16'),
+					camera('cam_9x16', 'f_9x16'),
+					camera('cam_root'),
+				],
+			},
+		])
+		expect(state.sceneItems.map(sceneItemLabel)).toEqual([
+			'Ecran + Cam: 16x9 / Camera / Facecam',
+			'Ecran + Cam: 9x16 / Facecam',
+			'Ecran + Cam: Facecam',
+		])
+	})
+
+	it('survives a cyclic folder tree', () => {
+		const state = new SlobsState()
+		state.setScenes([
+			{
+				id: 'scene_1',
+				name: 'Scene',
+				nodes: [folder('f_a', 'A', 'f_b'), folder('f_b', 'B', 'f_a'), camera('cam', 'f_a')],
+			},
+		])
+		expect(state.sceneItems[0]?.folders).toEqual(['B', 'A'])
 	})
 })
 
